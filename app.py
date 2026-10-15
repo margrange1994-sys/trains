@@ -394,7 +394,8 @@ def render_itinerary_view(train_code):
         except Exception as e:
             st.error(f"Error fetching itinerary: {e}")
 
-# --- MAIN DASHBOARD VIEW ---
+# --- MAIN DASHBOARD VIEW (AUTO-REFRESHES EVERY 1 MINUTE) ---
+@st.fragment(run_every=60)
 def render_dashboard():
     live_trains = fetch_live_trains()
     if not live_trains:
@@ -412,7 +413,7 @@ def render_dashboard():
     with col_search:
         auth_token = st.session_state.get("auth_token", "")
         st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
-        search_query = st.text_input("Search Train ID:", "").strip().upper()
+        search_query = st.text_input("Search Train ID:", "", key="search_train_input").strip().upper()
         if search_query:
             st.query_params["train"] = search_query
             st.query_params["auth"] = auth_token
