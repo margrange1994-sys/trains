@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling to match your dark theme dashboard (#0b0c10, #1f2833)
+# Custom CSS matching your exact dark theme and color styling
 st.markdown("""
     <style>
     .stApp {
@@ -15,8 +15,22 @@ st.markdown("""
     h1, h2, h3, p, label {
         color: #ffffff !important;
     }
-    .stDataFrame {
+    .train-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 14px;
+    }
+    .train-table th {
         background-color: #1f2833;
+        color: #ffffff;
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: bold;
+    }
+    .train-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #151c24;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -28,7 +42,7 @@ def strikethrough(text):
     return ''.join(char + '\u0336' for char in text)
 
 def parse_time(time_str):
-    """Parse time to total minutes as float (including seconds)."""
+    """Parse time to total minutes as float (including seconds)[cite: 3]."""
     if not time_str or time_str == "00:00:00":
         return None
     try:
@@ -42,7 +56,7 @@ def parse_time(time_str):
         return None
 
 def calculate_delay(scheduled, expected, actual):
-    """Return delay in fractional minutes."""
+    """Return delay in fractional minutes[cite: 3]."""
     sched_min = parse_time(scheduled)
     if sched_min is None:
         return 0.0
@@ -54,7 +68,7 @@ def calculate_delay(scheduled, expected, actual):
                 return round(actual_min - sched_min, 1)
     return 0.0
 
-# Initialize session state for train itinerary navigation
+# Initialize session state for train selection
 if "selected_train" not in st.session_state:
     st.session_state.selected_train = None
 
@@ -84,7 +98,7 @@ def fetch_live_trains():
                 late_mins = 0
                 is_cancelled = status_flag == "C" or (public_msg and "CANCEL" in public_msg.upper())
 
-                # Exact message parsing logic from your original script[cite: 3]
+                # Exact message parsing logic from original script[cite: 3]
                 if public_msg:
                     clean_msg = public_msg.replace("\\n", "\n").replace(r"\n", "\n")
                     lines = [l.strip() for l in clean_msg.split("\n") if l.strip()]
@@ -179,7 +193,7 @@ def fetch_live_trains():
         st.error(f"Error connecting to Irish Rail API: {e}")
     return {}
 
-# --- ITINERARY VIEW (Equivalent to TrainRouteWindow) ---
+# --- ITINERARY VIEW ---
 def render_itinerary_view(train_code):
     if st.button("← Back to Live Dashboard"):
         st.session_state.selected_train = None
@@ -218,15 +232,35 @@ def render_itinerary_view(train_code):
             return int(val.text) if val is not None and val.text else 0
         movements.sort(key=get_location_order)
 
-        itinerary_rows = []
-        for node in movements:
+        html_table = """
+        <table class="train-table">
+            <tr>
+                <th>Location</th>
+                <th>Stops</th>
+                <th>Due</th>
+                <th>Arrive</th>
+                <th>Depart</th>
+                <th>Mins</th>
+                <th>Reason</th>
+            </tr>
+        """
+
+        for idx, node in enumerate(movements):
             def get_txt(tag):
                 item = node.find(f'ns:{tag}', namespace)
                 return item.text.strip() if item is not None and item.text else ""
 
             station_name = get_txt("LocationFullName") or get_txt("LocationCode")
             loc_type = get_txt("LocationType")
-            stops_text = "Non Stop" if loc_type == "C" else ("Stops" if loc_type in ["O", "D", "S"] else "")
+            
+            if loc_type == "C":
+                stops_text, stops_color = "Non Stop", "#c678dd"
+            elif loc_type in ["O", "D", "S"]:
+                stops_text, stops_color = "Stops", "#ffffff"
+            else:
+                stops_text, stops_color = "", "#ffffff"
+            
+            location_color = "#d4af37" if loc_type in ["O", "D", "S"] else "#ffffff"
 
             sched_arr = get_txt("ScheduledArrival")
             sched_dep = get_txt("ScheduledDeparture")
@@ -238,6 +272,7 @@ def render_itinerary_view(train_code):
             exp_arr = get_txt("ExpectedArrival")
             exp_dep = get_txt("ExpectedDeparture")
             reason_text = get_txt("AutoReason") or "--"
+            reason_color = "#e74c3c" if reason_text != "--" else "#a6a6a6"
 
             has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
             delay_mins = 0
@@ -249,23 +284,39 @@ def render_itinerary_view(train_code):
 
             arrive_text = (actual_arr if actual_arr and actual_arr != "00:00:00" else exp_arr) or "--:--"
             if len(arrive_text) == 8: arrive_text = arrive_text[:5]
+            arrive_color = "#00ffff" if (actual_arr and actual_arr != "00:00:00") else "#ffffff"
 
             depart_text = (actual_dep if actual_dep and actual_dep != "00:00:00" else exp_dep) or "--:--"
             if len(depart_text) == 8: depart_text = depart_text[:5]
+            depart_color = "#00ffff" if (actual_dep and actual_dep != "00:00:00") else "#ffffff"
 
-            mins_text = f"{delay_mins:.1f}" if has_served else ""
+            if has_served:
+                if delay_mins == 0:
+                    mins_text, mins_color = "0.0", "#2ecc71"
+                elif delay_mins < 0:
+                    mins_text, mins_color = f"{abs(delay_mins):.1f}", "#ffffff"
+                else:
+                    mins_text = f"-{delay_mins:.1f}"
+                    mins_color = "#e74c3c" if delay_mins > 5 else ("#f1c40f" if delay_mins > 2 else "#2ecc71")
+            else:
+                mins_text, mins_color = "", "#ffffff"
 
-            itinerary_rows.append({
-                "Location": station_name,
-                "Stops": stops_text,
-                "Due": due_time,
-                "Arrive": arrive_text,
-                "Depart": depart_text,
-                "Mins": mins_text,
-                "Reason": reason_text
-            })
+            bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
 
-        st.dataframe(itinerary_rows, use_container_width=True, hide_index=True)
+            html_table += f"""
+            <tr style="background-color: {bg_color};">
+                <td style="color: {location_color};">{station_name}</td>
+                <td style="color: {stops_color};">{stops_text}</td>
+                <td style="color: #00ffff;">{due_time}</td>
+                <td style="color: {arrive_color};">{arrive_text}</td>
+                <td style="color: {depart_color};">{depart_text}</td>
+                <td style="color: {mins_color};">{mins_text}</td>
+                <td style="color: {reason_color};">{reason_text}</td>
+            </tr>
+            """
+        html_table += "</table>"
+        st.markdown(html_table, unsafe_allow_html=True)
+
     except Exception as e:
         st.error(f"Error fetching itinerary: {e}")
 
@@ -283,55 +334,89 @@ def render_dashboard():
     with col2:
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
-            st.session_state.selected_train = search_query
-            st.rerun()
+            if search_query in live_trains:
+                st.session_state.selected_train = search_query
+                st.rerun()
+            else:
+                st.warning(f"Train ID '{search_query}' not found in active live trains.")
 
     display_list = list(live_trains.values())
     display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
 
-    table_data = []
-    train_codes = []
-    for train in display_list:
+    st.write(f"({len(display_list)} live train data blocks returned by API)")
+
+    # Build HTML table with exact color-coding and click action
+    html_table = """
+    <table class="train-table">
+        <tr>
+            <th>ID</th>
+            <th>Time</th>
+            <th>Origin</th>
+            <th>Destination</th>
+            <th>Delay</th>
+            <th>Status</th>
+            <th>Reason</th>
+        </tr>
+    """
+
+    for idx, train in enumerate(display_list):
+        train_code = train["trainCode"]
         delay_mins = train["late"]
         is_cancelled = train.get("isCancelled", False)
 
+        # Exact delay severity color rules from original script[cite: 3]
         if is_cancelled:
-            delay_text = "Cancelled"
+            color, delay_text = "#e74c3c", "Cancelled"
         elif train["statusCode"] == "N":
-            delay_text = "Not Due"
+            color, delay_text = "#ffffff", "Not Due"
         elif train["statusCode"] == "E":
-            delay_text = "Finished"
+            color, delay_text = "#a6a6a6", "Finished"
         elif delay_mins < 0:
-            delay_text = f"{abs(delay_mins)}m Early"
+            color, delay_text = "#ffffff", f"{abs(delay_mins)}m Early"
         elif 0 <= delay_mins <= 2:
-            delay_text = "On Time" if delay_mins == 0 else f"{delay_mins}m Delay"
+            color, delay_text = "#2ecc71", ("On Time" if delay_mins == 0 else f"{delay_mins}m Delay")
         elif 2 < delay_mins <= 5:
-            delay_text = f"{delay_mins}m Delay"
+            color, delay_text = "#f1c40f", f"{delay_mins}m Delay"
         else:
-            delay_text = f"{delay_mins}m Delay"
+            color, delay_text = "#e74c3c", f"{delay_mins}m Delay"
 
-        table_data.append({
-            "ID": train["trainCode"],
-            "Time": train["origintime"],
-            "Origin": train["origin"],
-            "Destination": train["destination"],
-            "Delay": delay_text,
-            "Status": train["cleanStatus"],
-            "Reason": train["delayReason"]
-        })
-        train_codes.append(train["trainCode"])
+        bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
+        train_id_color = "#c678dd" if is_cancelled else "#d4af37"
+        reason_color = "#e74c3c" if train["delayReason"] != "--" else "#a6a6a6"
+        orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
+        dest_display = train["destination"] if train["destination"] not in ["Destination", ""] else "--"
 
-    st.write(f"({len(display_list)} live train data blocks returned by API)")
+        html_table += f"""
+        <tr style="background-color: {bg_color};">
+            <td><a href="?train={train_code}" target="_self" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td>
+            <td style="color: #ffffff;">{train["origintime"]}</td>
+            <td style="color: #ffffff;">{orig_display}</td>
+            <td style="color: #ffffff;">{dest_display}</td>
+            <td style="color: {color}; font-weight: bold;">{delay_text}</td>
+            <td style="color: #ffffff;">{train["cleanStatus"]}</td>
+            <td style="color: {reason_color};">{train["delayReason"]}</td>
+        </tr>
+        """
+    html_table += "</table>"
 
-    # Dropdown selector to view specific train itineraries (replaces double-click popup)
-    selected_service = st.selectbox("Select a train ID to view full itinerary:", ["-- Select Train ID --"] + train_codes)
+    # Capture URL query parameters for click selection
+    query_params = st.query_params
+    if "train" in query_params:
+        clicked_train = query_params["train"]
+        st.session_state.selected_train = clicked_train
+        st.rerun()
+
+    st.markdown(html_table, unsafe_allow_html=True)
+
+    # Alternatively, use a clean dropdown selector to jump to any train itinerary
+    st.markdown("---")
+    train_codes = [t["trainCode"] for t in display_list]
+    selected_service = st.selectbox("Or select train ID to view full itinerary:", ["-- Select Train ID --"] + train_codes)
     if selected_service != "-- Select Train ID --":
         st.session_state.selected_train = selected_service
         st.rerun()
 
-    st.dataframe(table_data, use_container_width=True, hide_index=True)
-
-# Routing controller
+# Router controller
 if st.session_state.selected_train:
     render_itinerary_view(st.session_state.selected_train)
 else:
