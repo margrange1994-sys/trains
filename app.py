@@ -1,21 +1,19 @@
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Page configuration for wide layout
-st.set_page_config(page_title="Rail Live Dashboard", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom CSS to mimic a clean dark theme dashboard
+# Custom styling to match your dark theme dashboard (#0b0c10, #1f2833)
 st.markdown("""
     <style>
-    .main {
+    .stApp {
         background-color: #0b0c10;
         color: #ffffff;
     }
-    h1 {
-        color: #ffffff;
-        font-family: 'Segoe UI', sans-serif;
+    h1, h2, h3, p, label {
+        color: #ffffff !important;
     }
     .stDataFrame {
         background-color: #1f2833;
@@ -23,11 +21,45 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Train Status Dashboard")
-st.write(f"Live Feed Connected — Last updated: {datetime.now().strftime('%H:%M:%S (%a)')}")
+def strikethrough(text):
+    """Apply Unicode combining strikethrough to text."""
+    if not text:
+        return ""
+    return ''.join(char + '\u0336' for char in text)
+
+def parse_time(time_str):
+    """Parse time to total minutes as float (including seconds)."""
+    if not time_str or time_str == "00:00:00":
+        return None
+    try:
+        if len(time_str) == 8:  # HH:MM:SS
+            h, m, s = map(int, time_str.split(':'))
+            return h * 60 + m + s / 60.0
+        else:  # HH:MM
+            h, m = map(int, time_str.split(':'))
+            return h * 60 + m
+    except:
+        return None
+
+def calculate_delay(scheduled, expected, actual):
+    """Return delay in fractional minutes."""
+    sched_min = parse_time(scheduled)
+    if sched_min is None:
+        return 0.0
+
+    for t in [actual, expected]:
+        if t and t != "00:00:00":
+            actual_min = parse_time(t)
+            if actual_min is not None:
+                return round(actual_min - sched_min, 1)
+    return 0.0
+
+# Initialize session state for train itinerary navigation
+if "selected_train" not in st.session_state:
+    st.session_state.selected_train = None
 
 @st.cache_data(ttl=30)
-def fetch_all_data():
+def fetch_live_trains():
     url = "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML"
     try:
         response = requests.get(url, timeout=10)
@@ -35,8 +67,8 @@ def fetch_all_data():
             root_xml = ET.fromstring(response.content)
             namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
             train_nodes = root_xml.findall('.//ns:objTrainPositions', namespace)
-            
-            trains_list = []
+            live_trains = {}
+
             for train_node in train_nodes:
                 def get_node_text(tag):
                     node = train_node.find(f'ns:{tag}', namespace)
@@ -48,45 +80,259 @@ def fetch_all_data():
                 direction = get_node_text("Direction")
                 origin_station = get_node_text("TrainOrigin") or "Origin"
                 dest_station = get_node_text("TrainDestination") or "Destination"
-                
+                origin_time = "--:--"
+                late_mins = 0
                 is_cancelled = status_flag == "C" or (public_msg and "CANCEL" in public_msg.upper())
-                
-                # Basic cleaning of public message for table view
-                clean_status = "En Route"
+
+                # Exact message parsing logic from your original script[cite: 3]
+                if public_msg:
+                    clean_msg = public_msg.replace("\\n", "\n").replace(r"\n", "\n")
+                    lines = [l.strip() for l in clean_msg.split("\n") if l.strip()]
+                    if lines:
+                        first_line = lines[0]
+                        if " to " in first_line and not first_line.startswith(("Expected", "Cancelled")):
+                            parts = first_line.split(" to ", 1)
+                            origin_station = parts[0].strip()
+                            dest_station = parts[1].split("(")[0].strip() if "(" in parts[1] else parts[1].strip()
+                        elif "Destination" in first_line or " and " in first_line or " and Destination" in clean_msg:
+                            origin_candidate = first_line
+                            if origin_candidate[0].isalpha() and len(origin_candidate) <= 5:
+                                origin_candidate = lines[1] if len(lines) > 1 else first_line
+                            if " and Destination" in clean_msg or "Destination" in clean_msg:
+                                if "Destination" in clean_msg:
+                                    dest_part = clean_msg.split("Destination")[-1].strip()
+                                    dest_station = dest_part.split("\n")[0].split()[0] if dest_part else dest_station
+                                if " and " in origin_candidate:
+                                    origin_station = origin_candidate.split(" and ")[0].strip()
+                                else:
+                                    origin_station = origin_candidate.strip()
+                        elif len(lines) >= 2:
+                            route_info = lines[1]
+                            if " - " in route_info:
+                                origin_time = route_info.split(" - ")[0].strip()
+                                core_route = route_info.split(" - ")[1]
+                                if " to " in core_route:
+                                    origin_station = core_route.split(" to ")[0].strip()
+                                    dest_part = core_route.split(" to ")[1]
+                                    dest_station = dest_part.split("(")[0].strip()
+                                    if "late)" in dest_part:
+                                        try: late_mins = int(dest_part.split("(")[1].split(" min")[0])
+                                        except: pass
+                                    elif "early)" in dest_part:
+                                        try: late_mins = -int(dest_part.split("(")[1].split(" min")[0])
+                                        except: pass
+                    if origin_station in ["Origin", "--"] or dest_station in ["Destination", "--"]:
+                        if "Expected Departure" in clean_msg:
+                            try: origin_time = clean_msg.split("Expected Departure ")[1][:5]
+                            except: pass
+                        msg_lower = clean_msg.lower()
+                        if " to " in msg_lower:
+                            idx = msg_lower.find(" to ")
+                            if idx != -1:
+                                origin_station = clean_msg[:idx].split("\n")[-1].strip()
+                                dest_station = clean_msg[idx+4:].split("\n")[0].split("(")[0].strip()
+                            
+                    if origin_station.upper().startswith(train_code.upper()):
+                        origin_station = origin_station[len(train_code):].strip()
+
+                if origin_station in ["Origin", "--"] and direction:
+                    if " to " in direction:
+                        dest_station = direction.split(" to ")[-1].strip()
+                    elif "bound" in direction.lower():
+                        dest_station = direction
+
+                if origin_station in ["Origin", "", "--"]: origin_station = "--"
+                if dest_station in ["Destination", "", "--"]: dest_station = "--"
+
+                clean_status = "Unknown Status"
+                delay_reason = "--"
+
                 if is_cancelled:
                     clean_status = "Cancelled"
-                elif status_flag == "N":
-                    clean_status = "Not yet started"
-                elif status_flag == "E":
-                    clean_status = "Service terminated"
-                elif status_flag == "R":
-                    clean_status = f"En route to {dest_station}"
+                    delay_reason = "Service Cancelled"
+                elif public_msg:
+                    msg_lines = [l.strip() for l in public_msg.replace(r"\n", "\n").split("\n") if l.strip()]
+                    if len(msg_lines) >= 3:
+                        clean_status = msg_lines[2]
+                    elif len(msg_lines) == 1:
+                        clean_status = msg_lines[0]
+                    if len(msg_lines) >= 4:
+                        delay_reason = msg_lines[3]
+                else:
+                    if status_flag == "N": clean_status = "Not yet started"
+                    elif status_flag == "E": clean_status = "Service terminated"
+                    elif status_flag == "R": clean_status = f"En route to {dest_station}"
 
-                trains_list.append({
-                    "ID": train_code,
-                    "Origin": origin_station,
-                    "Destination": dest_station,
-                    "Status": clean_status,
-                    "Direction": direction
-                })
-            return trains_list
+                live_trains[train_code] = {
+                    "trainCode": train_code,
+                    "origin": origin_station,
+                    "destination": dest_station,
+                    "origintime": origin_time,
+                    "late": late_mins,
+                    "statusCode": status_flag,
+                    "cleanStatus": clean_status,
+                    "delayReason": delay_reason,
+                    "isCancelled": is_cancelled
+                }
+            return live_trains
     except Exception as e:
         st.error(f"Error connecting to Irish Rail API: {e}")
-    return []
+    return {}
 
-# Fetch and display data in an interactive table
-trains_data = fetch_all_data()
+# --- ITINERARY VIEW (Equivalent to TrainRouteWindow) ---
+def render_itinerary_view(train_code):
+    if st.button("← Back to Live Dashboard"):
+        st.session_state.selected_train = None
+        st.rerun()
 
-if trains_data:
-    # Add a search filter box for Train IDs
-    search_query = st.text_input("Search Train ID:", "").strip().upper()
-    
-    if search_query:
-        filtered_data = [t for t in trains_data if search_query in t["ID"]]
-    else:
-        filtered_data = trains_data
+    st.subheader(f"Itinerary for Service {train_code}")
 
-    st.write(f"Showing {len(filtered_data)} active services:")
-    st.dataframe(filtered_data, use_container_width=True, hide_index=True)
+    now = datetime.now()
+    use_yesterday = False
+    date_str = (now - timedelta(days=1)).strftime("%d %b %Y") if use_yesterday else now.strftime("%d %b %Y")
+    url = f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={date_str}"
+
+    try:
+        response = requests.get(url, timeout=15)
+        if response.status_code != 200:
+            st.error(f"API Error: {response.status_code}")
+            return
+            
+        root_xml = ET.fromstring(response.content)
+        namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
+        movements = root_xml.findall('.//ns:objTrainMovements', namespace)
+
+        if not movements and now.hour < 3:
+            yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
+            response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=10)
+            if response.status_code == 200:
+                root_xml = ET.fromstring(response.content)
+                movements = root_xml.findall('.//ns:objTrainMovements', namespace)
+
+        if not movements:
+            st.warning(f"No movement data found for {train_code} on {date_str}.")
+            return
+
+        def get_location_order(node):
+            val = node.find('ns:LocationOrder', namespace)
+            return int(val.text) if val is not None and val.text else 0
+        movements.sort(key=get_location_order)
+
+        itinerary_rows = []
+        for node in movements:
+            def get_txt(tag):
+                item = node.find(f'ns:{tag}', namespace)
+                return item.text.strip() if item is not None and item.text else ""
+
+            station_name = get_txt("LocationFullName") or get_txt("LocationCode")
+            loc_type = get_txt("LocationType")
+            stops_text = "Non Stop" if loc_type == "C" else ("Stops" if loc_type in ["O", "D", "S"] else "")
+
+            sched_arr = get_txt("ScheduledArrival")
+            sched_dep = get_txt("ScheduledDeparture")
+            due_time = sched_dep if sched_dep and sched_dep != "00:00:00" else sched_arr
+            if len(due_time) == 8: due_time = due_time[:5]
+
+            actual_arr = get_txt("Arrival")
+            actual_dep = get_txt("Departure")
+            exp_arr = get_txt("ExpectedArrival")
+            exp_dep = get_txt("ExpectedDeparture")
+            reason_text = get_txt("AutoReason") or "--"
+
+            has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
+            delay_mins = 0
+            if has_served:
+                if sched_dep and sched_dep != "00:00:00":
+                    delay_mins = calculate_delay(sched_dep, exp_dep, actual_dep)
+                elif sched_arr and sched_arr != "00:00:00":
+                    delay_mins = calculate_delay(sched_arr, exp_arr, actual_arr)
+
+            arrive_text = (actual_arr if actual_arr and actual_arr != "00:00:00" else exp_arr) or "--:--"
+            if len(arrive_text) == 8: arrive_text = arrive_text[:5]
+
+            depart_text = (actual_dep if actual_dep and actual_dep != "00:00:00" else exp_dep) or "--:--"
+            if len(depart_text) == 8: depart_text = depart_text[:5]
+
+            mins_text = f"{delay_mins:.1f}" if has_served else ""
+
+            itinerary_rows.append({
+                "Location": station_name,
+                "Stops": stops_text,
+                "Due": due_time,
+                "Arrive": arrive_text,
+                "Depart": depart_text,
+                "Mins": mins_text,
+                "Reason": reason_text
+            })
+
+        st.dataframe(itinerary_rows, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Error fetching itinerary: {e}")
+
+# --- MAIN DASHBOARD VIEW ---
+def render_dashboard():
+    st.title("Train Status")
+    st.write(f"Last updated: {datetime.now().strftime('%H:%M:%S (%a)')}")
+
+    live_trains = fetch_live_trains()
+    if not live_trains:
+        st.warning("No live train data returned from API.")
+        return
+
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        search_query = st.text_input("Search Train ID:", "").strip().upper()
+        if search_query:
+            st.session_state.selected_train = search_query
+            st.rerun()
+
+    display_list = list(live_trains.values())
+    display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
+
+    table_data = []
+    train_codes = []
+    for train in display_list:
+        delay_mins = train["late"]
+        is_cancelled = train.get("isCancelled", False)
+
+        if is_cancelled:
+            delay_text = "Cancelled"
+        elif train["statusCode"] == "N":
+            delay_text = "Not Due"
+        elif train["statusCode"] == "E":
+            delay_text = "Finished"
+        elif delay_mins < 0:
+            delay_text = f"{abs(delay_mins)}m Early"
+        elif 0 <= delay_mins <= 2:
+            delay_text = "On Time" if delay_mins == 0 else f"{delay_mins}m Delay"
+        elif 2 < delay_mins <= 5:
+            delay_text = f"{delay_mins}m Delay"
+        else:
+            delay_text = f"{delay_mins}m Delay"
+
+        table_data.append({
+            "ID": train["trainCode"],
+            "Time": train["origintime"],
+            "Origin": train["origin"],
+            "Destination": train["destination"],
+            "Delay": delay_text,
+            "Status": train["cleanStatus"],
+            "Reason": train["delayReason"]
+        })
+        train_codes.append(train["trainCode"])
+
+    st.write(f"({len(display_list)} live train data blocks returned by API)")
+
+    # Dropdown selector to view specific train itineraries (replaces double-click popup)
+    selected_service = st.selectbox("Select a train ID to view full itinerary:", ["-- Select Train ID --"] + train_codes)
+    if selected_service != "-- Select Train ID --":
+        st.session_state.selected_train = selected_service
+        st.rerun()
+
+    st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+# Routing controller
+if st.session_state.selected_train:
+    render_itinerary_view(st.session_state.selected_train)
 else:
-    st.warning("No train data currently available or API connection failed.")
+    render_dashboard()
