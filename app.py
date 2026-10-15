@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling for dark theme and reduced top spacing to show more table rows
+# Custom styling for dark theme and reduced top spacing
 st.markdown("""
     <style>
     .stApp {
@@ -82,7 +82,6 @@ def fetch_live_trains():
                 late_mins = 0
                 is_cancelled = status_flag == "C" or (public_msg and "CANCEL" in public_msg.upper())
 
-                # Exact message parsing logic from original script[cite: 3]
                 if public_msg:
                     clean_msg = public_msg.replace("\\n", "\n").replace(r"\n", "\n")
                     lines = [l.strip() for l in clean_msg.split("\n") if l.strip()]
@@ -326,52 +325,50 @@ def render_dashboard():
         })
 
     df = pd.DataFrame(table_data)
+    display_df = df.drop(columns=["_isCancelled", "_statusCode", "_lateMins"])
 
-    # Pandas Styler function to apply exact train ID and delay color rules from original script[cite: 3]
+    # Pandas Styler function referencing original df
     def style_table(df_subset):
         styles = pd.DataFrame('', index=df_subset.index, columns=df_subset.columns)
         for i, row in df_subset.iterrows():
-            # Train ID color rules: purple (#c678dd) if cancelled, gold (#d4af37) otherwise[cite: 3]
-            if row["_isCancelled"]:
+            is_cancelled = df.at[i, "_isCancelled"]
+            status_code = df.at[i, "_statusCode"]
+            late_mins = df.at[i, "_lateMins"]
+
+            if is_cancelled:
                 styles.at[i, "ID"] = "color: #c678dd; font-weight: bold;"
             else:
                 styles.at[i, "ID"] = "color: #d4af37; font-weight: bold;"
 
-            # Delay color rules: green, yellow, red, white, grey based on severity[cite: 3]
             delay_text = str(row["Delay"])
-            if row["_isCancelled"] or "Cancelled" in delay_text:
+            if is_cancelled or "Cancelled" in delay_text:
                 styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
-            elif row["_statusCode"] == "N":
+            elif status_code == "N":
                 styles.at[i, "Delay"] = "color: #ffffff;"
-            elif row["_statusCode"] == "E":
+            elif status_code == "E":
                 styles.at[i, "Delay"] = "color: #a6a6a6;"
             elif "Early" in delay_text:
                 styles.at[i, "Delay"] = "color: #ffffff;"
             elif "On Time" in delay_text or "0m Delay" in delay_text:
                 styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
             else:
-                # Extract delay numeric minutes if possible for threshold styling
                 try:
-                    mins = row["_lateMins"]
-                    if mins <= 2:
+                    if late_mins <= 2:
                         styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
-                    elif 2 < mins <= 5:
+                    elif 2 < late_mins <= 5:
                         styles.at[i, "Delay"] = "color: #f1c40f; font-weight: bold;"
                     else:
                         styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
                 except:
                     styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
 
-            # Reason color: red if active reason, grey otherwise[cite: 3]
             if str(row["Reason"]) != "--":
                 styles.at[i, "Reason"] = "color: #e74c3c;"
             else:
                 styles.at[i, "Reason"] = "color: #a6a6a6;"
 
-        # Drop internal helper columns from styling output view
-        return styles.drop(columns=["_isCancelled", "_statusCode", "_lateMins"], errors="ignore")
+        return styles
 
-    display_df = df.drop(columns=["_isCancelled", "_statusCode", "_lateMins"])
     styled_df = display_df.style.apply(style_table, axis=None)
 
     # Interactive table with row selection support
