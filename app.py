@@ -63,7 +63,7 @@ if "selected_train" not in st.session_state:
 def fetch_live_trains():
     url = "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         if response.status_code == 200:
             root_xml = ET.fromstring(response.content)
             namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
@@ -190,16 +190,15 @@ def render_itinerary_view(train_code):
     date_str = (now - timedelta(days=1)).strftime("%d %b %Y") if use_yesterday else now.strftime("%d %b %Y")
     url = f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={date_str}"
 
-    with st.spinner(f"Loading itinerary for service {train_code} (waiting for response)..."):
+    with st.spinner(f"Loading itinerary for service {train_code} (waiting up to 60s for API response)..."):
         try:
-            # Single robust request with an extended timeout (35 seconds) to prevent premature dropouts
-            response = requests.get(url, timeout=35)
+            # Extended timeout of 60 seconds to ensure the API has ample time to respond
+            response = requests.get(url, timeout=60)
 
             if response.status_code != 200:
-                # Fallback check for yesterday if near midnight
                 if now.hour < 3 and not use_yesterday:
                     yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
-                    response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=35)
+                    response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=60)
                 
                 if response.status_code != 200:
                     st.error(f"API Error: {response.status_code}")
