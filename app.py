@@ -37,6 +37,9 @@ st.markdown("""
         text-align: left;
         padding: 8px 12px;
         font-weight: bold;
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
     .train-table td {
         padding: 8px 12px;
@@ -289,8 +292,8 @@ def render_itinerary_view(train_code):
             """
             st.markdown(header_html, unsafe_allow_html=True)
 
-            itinerary_rows = []
-            for node in movements:
+            itinerary_rows_html = ""
+            for idx, node in enumerate(movements):
                 station_name = extract_node_txt(node, "LocationFullName") or extract_node_txt(node, "LocationCode")
                 loc_type = extract_node_txt(node, "LocationType")
                 stops_text = "Non Stop" if loc_type == "C" else ("Stops" if loc_type in ["O", "D", "S"] else "")
@@ -322,65 +325,31 @@ def render_itinerary_view(train_code):
 
                 mins_text = f"{delay_mins:.1f}" if has_served else ""
 
-                itinerary_rows.append({
-                    "Location": station_name,
-                    "Stops": stops_text,
-                    "Due": due_time,
-                    "Arrive": arrive_text,
-                    "Depart": depart_text,
-                    "Mins": mins_text,
-                    "Reason": reason_text,
-                    "_hasServed": has_served,
-                    "_delayMins": delay_mins,
-                    "_locType": loc_type
-                })
+                loc_color = "#c678dd" if loc_type == "C" else ("#d4af37" if loc_type in ["O", "D", "S"] else "#ffffff")
+                stops_color = "#c678dd" if loc_type == "C" else "#ffffff"
+                arr_dep_color = "#00ffff" if has_served else "#666666"
 
-            df_itin = pd.DataFrame(itinerary_rows)
-            display_itin = df_itin.drop(columns=["_hasServed", "_delayMins", "_locType"])
-
-            def style_itin(df_sub):
-                styles = pd.DataFrame('', index=df_sub.index, columns=df_sub.columns)
-                for i, row in df_sub.iterrows():
-                    has_served = df_itin.at[i, "_hasServed"]
-                    delay_mins = df_itin.at[i, "_delayMins"]
-                    loc_type = df_itin.at[i, "_locType"]
-
-                    if loc_type in ["O", "D", "S"]:
-                        styles.at[i, "Location"] = "color: #d4af37;"
-                    elif loc_type == "C":
-                        styles.at[i, "Location"] = "color: #c678dd;"
-
-                    if loc_type == "C":
-                        styles.at[i, "Stops"] = "color: #c678dd;"
-
-                    if has_served:
-                        styles.at[i, "Arrive"] = "color: #00ffff;"
-                        styles.at[i, "Depart"] = "color: #00ffff;"
+                if has_served:
+                    if delay_mins == 0:
+                        mins_color = "#2ecc71; font-weight: bold;"
+                    elif delay_mins < 0:
+                        mins_color = "#ffffff;"
+                    elif delay_mins <= 2:
+                        mins_color = "#2ecc71; font-weight: bold;"
+                    elif delay_mins <= 5:
+                        mins_color = "#f1c40f; font-weight: bold;"
                     else:
-                        styles.at[i, "Arrive"] = "color: #666666;"
-                        styles.at[i, "Depart"] = "color: #666666;"
+                        mins_color = "#e74c3c; font-weight: bold;"
+                else:
+                    mins_color = "#ffffff;"
 
-                    if has_served:
-                        if delay_mins == 0:
-                            styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
-                        elif delay_mins < 0:
-                            styles.at[i, "Mins"] = "color: #ffffff;"
-                        elif delay_mins <= 2:
-                            styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
-                        elif delay_mins <= 5:
-                            styles.at[i, "Mins"] = "color: #f1c40f; font-weight: bold;"
-                        else:
-                            styles.at[i, "Mins"] = "color: #e74c3c; font-weight: bold;"
+                reason_color = "#e74c3c" if reason_text != "--" else "#a6a6a6"
+                bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
 
-                    if str(row["Reason"]) != "--":
-                        styles.at[i, "Reason"] = "color: #e74c3c;"
-                    else:
-                        styles.at[i, "Reason"] = "color: #a6a6a6;"
+                itinerary_rows_html += f'<tr style="background-color: {bg_color};"><td style="color: {loc_color};">{station_name}</td><td style="color: {stops_color};">{stops_text}</td><td style="color: #00ffff;">{due_time}</td><td style="color: {arr_dep_color};">{arrive_text}</td><td style="color: {arr_dep_color};">{depart_text}</td><td style="color: {mins_color};">{mins_text}</td><td style="color: {reason_color};">{reason_text}</td></tr>'
 
-                return styles
-
-            styled_itin = display_itin.style.apply(style_itin, axis=None)
-            st.dataframe(styled_itin, use_container_width=True, hide_index=True, height=700)
+            itin_table_html = f'<div style="max-height: 700px; overflow-y: auto;"><table class="train-table"><tr><th>Location</th><th>Stops</th><th>Due</th><th>Arrive</th><th>Depart</th><th>Mins</th><th>Reason</th></tr>{itinerary_rows_html}</table></div>'
+            st.markdown(itin_table_html, unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Error fetching itinerary: {e}")
 
@@ -408,20 +377,7 @@ def render_dashboard():
             else:
                 st.warning(f"Train ID '{search_query}' not found.")
 
-    # Build HTML table where Train IDs open in a new tab/window via target="_blank"
-    html_table = """
-    <table class="train-table">
-        <tr>
-            <th>ID</th>
-            <th>Time</th>
-            <th>Origin</th>
-            <th>Destination</th>
-            <th>Delay</th>
-            <th>Status</th>
-            <th>Reason</th>
-        </tr>
-    """
-
+    train_rows_html = ""
     for idx, train in enumerate(display_list):
         train_code = train["trainCode"]
         delay_mins = train["late"]
@@ -448,22 +404,12 @@ def render_dashboard():
         orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
         dest_display = train["destination"] if train["destination"] not in ["Destination", ""] else "--"
 
-        html_table += f"""
-        <tr style="background-color: {bg_color};">
-            <td><a href="?train={train_code}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td>
-            <td style="color: #ffffff;">{train["origintime"]}</td>
-            <td style="color: #ffffff;">{orig_display}</td>
-            <td style="color: #ffffff;">{dest_display}</td>
-            <td style="color: {color}; font-weight: bold;">{delay_text}</td>
-            <td style="color: #ffffff;">{train["cleanStatus"]}</td>
-            <td style="color: {reason_color};">{train["delayReason"]}</td>
-        </tr>
-        """
-    html_table += "</table>"
+        train_rows_html += f'<tr style="background-color: {bg_color};"><td><a href="?train={train_code}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td><td style="color: #ffffff;">{train["origintime"]}</td><td style="color: #ffffff;">{orig_display}</td><td style="color: #ffffff;">{dest_display}</td><td style="color: {color}; font-weight: bold;">{delay_text}</td><td style="color: #ffffff;">{train["cleanStatus"]}</td><td style="color: {reason_color};">{train["delayReason"]}</td></tr>'
 
-    st.markdown(html_table, unsafe_allow_html=True)
+    dashboard_table_html = f'<div style="max-height: 700px; overflow-y: auto;"><table class="train-table"><tr><th>ID</th><th>Time</th><th>Origin</th><th>Destination</th><th>Delay</th><th>Status</th><th>Reason</th></tr>{train_rows_html}</table></div>'
+    st.markdown(dashboard_table_html, unsafe_allow_html=True)
 
-# Router controller: Checks if a train query parameter exists in the URL
+# Router controller
 query_params = st.query_params
 if "train" in query_params:
     render_itinerary_view(query_params["train"])
