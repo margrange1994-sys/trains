@@ -100,7 +100,6 @@ def fetch_live_trains():
                 origin_time = "--:--"
                 late_mins = 0
                 
-                # Robustly detect full or partial cancellations / alterations
                 pub_upper = public_msg.upper() if public_msg else ""
                 is_cancelled = status_flag == "C" or any(kw in pub_upper for kw in ["CANCEL", "ALTER", "OMIT", "SUSPEND"])
 
@@ -325,7 +324,8 @@ def render_itinerary_view(train_code):
 
                 mins_text = f"{delay_mins:.1f}" if has_served else ""
 
-                loc_color = "#c678dd" if loc_type == "C" else ("#d4af37" if loc_type in ["O", "D", "S"] else "#ffffff")
+                # Location color: White (#ffffff) for cancelled/non-stop (loc_type == "C"), Gold (#d4af37) for Origin/Destination/Stop (O, D, S)
+                loc_color = "#d4af37" if loc_type in ["O", "D", "S"] else "#ffffff"
                 stops_color = "#c678dd" if loc_type == "C" else "#ffffff"
                 arr_dep_color = "#00ffff" if has_served else "#666666"
 
@@ -399,7 +399,6 @@ def render_dashboard():
             color, delay_text = "#e74c3c", f"{delay_mins}m Delay"
 
         bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
-        # Train ID is purple (#c678dd) if fully or partially cancelled
         train_id_color = "#c678dd" if is_cancelled else "#d4af37"
         reason_color = "#e74c3c" if train["delayReason"] != "--" else "#a6a6a6"
         orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
