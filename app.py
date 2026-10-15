@@ -6,9 +6,13 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling for dark theme and reduced top spacing
+# Custom styling to hide the top header bar and optimize layout for maximum table view
 st.markdown("""
     <style>
+    /* Hides the top Streamlit header bar, deploy button, and menu tools */
+    [data-testid="stHeader"] {
+        display: none;
+    }
     .stApp {
         background-color: #0b0c10;
         color: #ffffff;
@@ -26,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def parse_time(time_str):
-    """Parse time to total minutes as float (including seconds)[cite: 3]."""
+    """Parse time to total minutes as float (including seconds)."""
     if not time_str or time_str == "00:00:00":
         return None
     try:
@@ -40,7 +44,7 @@ def parse_time(time_str):
         return None
 
 def calculate_delay(scheduled, expected, actual):
-    """Return delay in fractional minutes[cite: 3]."""
+    """Return delay in fractional minutes."""
     sched_min = parse_time(scheduled)
     if sched_min is None:
         return 0.0
@@ -229,7 +233,6 @@ def render_itinerary_view(train_code):
         origin_name = extract_node_txt(first_node, "LocationFullName")
         dest_name = extract_node_txt(last_node, "LocationFullName")
 
-        # Determine latest delay and cancellation status from movements
         has_any_cancel = any(extract_node_txt(n, "LocationType") == "C" for n in movements)
         is_fully_cancelled = all(extract_node_txt(n, "LocationType") == "C" for n in movements)
         
@@ -248,7 +251,6 @@ def render_itinerary_view(train_code):
                 elif sched_arr and sched_arr != "00:00:00":
                     latest_delay = calculate_delay(sched_arr, exp_arr, actual_arr)
 
-        # Build header status text & color matching original app
         if is_fully_cancelled or has_any_cancel:
             status_str, status_color = "Cancelled", "#c678dd"
             id_color = "#c678dd"
@@ -265,7 +267,7 @@ def render_itinerary_view(train_code):
             status_str, status_color = f"Late {latest_delay:.1f}m", "#e74c3c"
             id_color = "#d4af37"
 
-        # Render custom styled header matching original app format
+        # Custom header showing Train ID, Departure time, Origin, Destination, and Status
         header_html = f"""
         <div style="font-size: 20px; font-weight: bold; font-family: 'Segoe UI', sans-serif; margin-bottom: 15px;">
             <span style="color: {id_color};">{train_code}</span> 
@@ -325,7 +327,6 @@ def render_itinerary_view(train_code):
         df_itin = pd.DataFrame(itinerary_rows)
         display_itin = df_itin.drop(columns=["_hasServed", "_delayMins", "_locType"])
 
-        # Styler function for Itinerary view
         def style_itin(df_sub):
             styles = pd.DataFrame('', index=df_sub.index, columns=df_sub.columns)
             for i, row in df_sub.iterrows():
@@ -349,7 +350,6 @@ def render_itinerary_view(train_code):
                     styles.at[i, "Arrive"] = "color: #666666;"
                     styles.at[i, "Depart"] = "color: #666666;"
 
-                # Delay colors in Mins column
                 if has_served:
                     if delay_mins == 0:
                         styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
@@ -384,6 +384,7 @@ def render_dashboard():
     display_list = list(live_trains.values())
     display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
 
+    # Top layout: Title & timestamp on the left, search box on the right at the same level
     col_title, col_search = st.columns([3, 1])
     with col_title:
         st.title("Train Status")
