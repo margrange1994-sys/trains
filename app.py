@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling to hide the top header bar and optimize layout
+# Custom styling to hide the top header bar, style tables, and ensure dark theme
 st.markdown("""
     <style>
     [data-testid="stHeader"] {
@@ -24,6 +24,23 @@ st.markdown("""
     }
     h1, h2, h3, p, label {
         color: #ffffff !important;
+    }
+    .train-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 14px;
+    }
+    .train-table th {
+        background-color: #1f2833;
+        color: #ffffff;
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: bold;
+    }
+    .train-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #151c24;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -54,10 +71,6 @@ def calculate_delay(scheduled, expected, actual):
             if actual_min is not None:
                 return round(actual_min - sched_min, 1)
     return 0.0
-
-# Initialize session state for train selection
-if "selected_train" not in st.session_state:
-    st.session_state.selected_train = None
 
 @st.cache_data(ttl=30)
 def fetch_live_trains():
@@ -182,7 +195,7 @@ def fetch_live_trains():
 # --- ITINERARY VIEW ---
 def render_itinerary_view(train_code):
     if st.button("← Back to Live Dashboard"):
-        st.session_state.selected_train = None
+        st.query_params.clear()
         st.rerun()
 
     now = datetime.now()
@@ -192,7 +205,6 @@ def render_itinerary_view(train_code):
 
     with st.spinner(f"Loading itinerary for service {train_code} (waiting up to 60s for API response)..."):
         try:
-            # Extended timeout of 60 seconds to ensure the API has ample time to respond
             response = requests.get(url, timeout=60)
 
             if response.status_code != 200:
@@ -391,107 +403,69 @@ def render_dashboard():
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
             if search_query in live_trains:
-                st.session_state.selected_train = search_query
+                st.query_params["train"] = search_query
                 st.rerun()
             else:
                 st.warning(f"Train ID '{search_query}' not found.")
 
-    table_data = []
-    for train in display_list:
+    # Build HTML table where Train IDs open in a new tab/window via target="_blank"
+    html_table = """
+    <table class="train-table">
+        <tr>
+            <th>ID</th>
+            <th>Time</th>
+            <th>Origin</th>
+            <th>Destination</th>
+            <th>Delay</th>
+            <th>Status</th>
+            <th>Reason</th>
+        </tr>
+    """
+
+    for idx, train in enumerate(display_list):
+        train_code = train["trainCode"]
         delay_mins = train["late"]
         is_cancelled = train.get("isCancelled", False)
 
         if is_cancelled:
-            delay_text = "Cancelled"
+            color, delay_text = "#e74c3c", "Cancelled"
         elif train["statusCode"] == "N":
-            delay_text = "Not Due"
+            color, delay_text = "#ffffff", "Not Due"
         elif train["statusCode"] == "E":
-            delay_text = "Finished"
+            color, delay_text = "#a6a6a6", "Finished"
         elif delay_mins < 0:
-            delay_text = f"{abs(delay_mins)}m Early"
+            color, delay_text = "#ffffff", f"{abs(delay_mins)}m Early"
         elif 0 <= delay_mins <= 2:
-            delay_text = "On Time" if delay_mins == 0 else f"{delay_mins}m Delay"
+            color, delay_text = "#2ecc71", ("On Time" if delay_mins == 0 else f"{delay_mins}m Delay")
         elif 2 < delay_mins <= 5:
-            delay_text = f"{delay_mins}m Delay"
+            color, delay_text = "#f1c40f", f"{delay_mins}m Delay"
         else:
-            delay_text = f"{delay_mins}m Delay"
+            color, delay_text = "#e74c3c", f"{delay_mins}m Delay"
 
-        table_data.append({
-            "ID": train["trainCode"],
-            "Time": train["origintime"],
-            "Origin": train["origin"] if train["origin"] not in ["Origin", ""] else "--",
-            "Destination": train["destination"] if train["destination"] not in ["Destination", ""] else "--",
-            "Delay": delay_text,
-            "Status": train["cleanStatus"],
-            "Reason": train["delayReason"],
-            "_isCancelled": is_cancelled,
-            "_statusCode": train["statusCode"],
-            "_lateMins": delay_mins
-        })
+        bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
+        train_id_color = "#c678dd" if is_cancelled else "#d4af37"
+        reason_color = "#e74c3c" if train["delayReason"] != "--" else "#a6a6a6"
+        orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
+        dest_display = train["destination"] if train["destination"] not in ["Destination", ""] else "--"
 
-    df = pd.DataFrame(table_data)
-    display_df = df.drop(columns=["_isCancelled", "_statusCode", "_lateMins"])
+        html_table += f"""
+        <tr style="background-color: {bg_color};">
+            <td><a href="?train={train_code}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td>
+            <td style="color: #ffffff;">{train["origintime"]}</td>
+            <td style="color: #ffffff;">{orig_display}</td>
+            <td style="color: #ffffff;">{dest_display}</td>
+            <td style="color: {color}; font-weight: bold;">{delay_text}</td>
+            <td style="color: #ffffff;">{train["cleanStatus"]}</td>
+            <td style="color: {reason_color};">{train["delayReason"]}</td>
+        </tr>
+        """
+    html_table += "</table>"
 
-    def style_table(df_subset):
-        styles = pd.DataFrame('', index=df_subset.index, columns=df_subset.columns)
-        for i, row in df_subset.iterrows():
-            is_cancelled = df.at[i, "_isCancelled"]
-            status_code = df.at[i, "_statusCode"]
-            late_mins = df.at[i, "_lateMins"]
+    st.markdown(html_table, unsafe_allow_html=True)
 
-            if is_cancelled:
-                styles.at[i, "ID"] = "color: #c678dd; font-weight: bold;"
-            else:
-                styles.at[i, "ID"] = "color: #d4af37; font-weight: bold;"
-
-            delay_text = str(row["Delay"])
-            if is_cancelled or "Cancelled" in delay_text:
-                styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
-            elif status_code == "N":
-                styles.at[i, "Delay"] = "color: #ffffff;"
-            elif status_code == "E":
-                styles.at[i, "Delay"] = "color: #a6a6a6;"
-            elif "Early" in delay_text:
-                styles.at[i, "Delay"] = "color: #ffffff;"
-            elif "On Time" in delay_text or "0m Delay" in delay_text:
-                styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
-            else:
-                try:
-                    if late_mins <= 2:
-                        styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
-                    elif 2 < late_mins <= 5:
-                        styles.at[i, "Delay"] = "color: #f1c40f; font-weight: bold;"
-                    else:
-                        styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
-                except:
-                    styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
-
-            if str(row["Reason"]) != "--":
-                styles.at[i, "Reason"] = "color: #e74c3c;"
-            else:
-                styles.at[i, "Reason"] = "color: #a6a6a6;"
-
-        return styles
-
-    styled_df = display_df.style.apply(style_table, axis=None)
-
-    event = st.dataframe(
-        styled_df,
-        use_container_width=True,
-        hide_index=True,
-        height=700,
-        selection_mode="single-row",
-        on_select="rerun"
-    )
-
-    if event.selection and event.selection.rows:
-        row_idx = event.selection.rows[0]
-        clicked_train_code = display_df.iloc[row_idx]["ID"]
-        st.session_state.selected_train = clicked_train_code
-        st.rerun()
-
-# Router controller
-if st.session_state.selected_train:
-    render_itinerary_view(st.session_state.selected_train)
+# Router controller: Checks if a train query parameter exists in the URL
+query_params = st.query_params
+if "train" in query_params:
+    render_itinerary_view(query_params["train"])
 else:
     render_dashboard()
