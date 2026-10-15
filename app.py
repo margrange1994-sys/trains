@@ -6,10 +6,9 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling to hide the top header bar and optimize layout for maximum table view
+# Custom styling to hide the top header bar and optimize layout
 st.markdown("""
     <style>
-    /* Hides the top Streamlit header bar, deploy button, and menu tools */
     [data-testid="stHeader"] {
         display: none;
     }
@@ -191,188 +190,198 @@ def render_itinerary_view(train_code):
     date_str = (now - timedelta(days=1)).strftime("%d %b %Y") if use_yesterday else now.strftime("%d %b %Y")
     url = f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={date_str}"
 
-    try:
-        response = requests.get(url, timeout=15)
-        if response.status_code != 200:
-            st.error(f"API Error: {response.status_code}")
-            return
+    with st.spinner(f"Loading itinerary for service {train_code}..."):
+        try:
+            # Robust retry loop to prevent intermittent API timeouts
+            response = None
+            for attempt in range(3):
+                try:
+                    response = requests.get(url, timeout=12)
+                    if response.status_code == 200:
+                        break
+                except requests.exceptions.RequestException:
+                    if attempt == 2:
+                        raise
+                    continue
+
+            if not response or response.status_code != 200:
+                st.error(f"API Error: {response.status_code if response else 'Connection failed'}")
+                return
+                
+            root_xml = ET.fromstring(response.content)
+            namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
+            movements = root_xml.findall('.//ns:objTrainMovements', namespace)
+
+            if not movements and now.hour < 3:
+                yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
+                response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=12)
+                if response.status_code == 200:
+                    root_xml = ET.fromstring(response.content)
+                    movements = root_xml.findall('.//ns:objTrainMovements', namespace)
+
+            if not movements:
+                st.warning(f"No movement data found for {train_code} on {date_str}.")
+                return
+
+            def get_location_order(node):
+                val = node.find('ns:LocationOrder', namespace)
+                return int(val.text) if val is not None and val.text else 0
+            movements.sort(key=get_location_order)
+
+            def extract_node_txt(node, tag):
+                item = node.find(f'ns:{tag}', namespace)
+                return item.text.strip() if item is not None and item.text else ""
+
+            first_node = movements[0]
+            last_node = movements[-1]
             
-        root_xml = ET.fromstring(response.content)
-        namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
-        movements = root_xml.findall('.//ns:objTrainMovements', namespace)
-
-        if not movements and now.hour < 3:
-            yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
-            response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=10)
-            if response.status_code == 200:
-                root_xml = ET.fromstring(response.content)
-                movements = root_xml.findall('.//ns:objTrainMovements', namespace)
-
-        if not movements:
-            st.warning(f"No movement data found for {train_code} on {date_str}.")
-            return
-
-        def get_location_order(node):
-            val = node.find('ns:LocationOrder', namespace)
-            return int(val.text) if val is not None and val.text else 0
-        movements.sort(key=get_location_order)
-
-        def extract_node_txt(node, tag):
-            item = node.find(f'ns:{tag}', namespace)
-            return item.text.strip() if item is not None and item.text else ""
-
-        first_node = movements[0]
-        last_node = movements[-1]
-        
-        orig_time = extract_node_txt(first_node, "ScheduledDeparture")
-        if len(orig_time) == 8: orig_time = orig_time[:5]
-        if not orig_time or orig_time == "00:00":
-            orig_time = extract_node_txt(first_node, "ScheduledArrival")
+            orig_time = extract_node_txt(first_node, "ScheduledDeparture")
             if len(orig_time) == 8: orig_time = orig_time[:5]
+            if not orig_time or orig_time == "00:00":
+                orig_time = extract_node_txt(first_node, "ScheduledArrival")
+                if len(orig_time) == 8: orig_time = orig_time[:5]
 
-        origin_name = extract_node_txt(first_node, "LocationFullName")
-        dest_name = extract_node_txt(last_node, "LocationFullName")
+            origin_name = extract_node_txt(first_node, "LocationFullName")
+            dest_name = extract_node_txt(last_node, "LocationFullName")
 
-        has_any_cancel = any(extract_node_txt(n, "LocationType") == "C" for n in movements)
-        is_fully_cancelled = all(extract_node_txt(n, "LocationType") == "C" for n in movements)
-        
-        latest_delay = 0.0
-        for node in movements:
-            sched_dep = extract_node_txt(node, "ScheduledDeparture")
-            sched_arr = extract_node_txt(node, "ScheduledArrival")
-            exp_dep = extract_node_txt(node, "ExpectedDeparture")
-            exp_arr = extract_node_txt(node, "ExpectedArrival")
-            actual_dep = extract_node_txt(node, "Departure")
-            actual_arr = extract_node_txt(node, "Arrival")
-            has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
-            if has_served:
-                if sched_dep and sched_dep != "00:00:00":
-                    latest_delay = calculate_delay(sched_dep, exp_dep, actual_dep)
-                elif sched_arr and sched_arr != "00:00:00":
-                    latest_delay = calculate_delay(sched_arr, exp_arr, actual_arr)
-
-        if is_fully_cancelled or has_any_cancel:
-            status_str, status_color = "Cancelled", "#c678dd"
-            id_color = "#c678dd"
-        elif latest_delay == 0:
-            status_str, status_color = "On Time", "#2ecc71"
-            id_color = "#d4af37"
-        elif latest_delay <= 2:
-            status_str, status_color = f"Late {latest_delay:.1f}m", "#2ecc71"
-            id_color = "#d4af37"
-        elif latest_delay <= 5:
-            status_str, status_color = f"Late {latest_delay:.1f}m", "#f1c40f"
-            id_color = "#d4af37"
-        else:
-            status_str, status_color = f"Late {latest_delay:.1f}m", "#e74c3c"
-            id_color = "#d4af37"
-
-        # Custom header showing Train ID, Departure time, Origin, Destination, and Status
-        header_html = f"""
-        <div style="font-size: 20px; font-weight: bold; font-family: 'Segoe UI', sans-serif; margin-bottom: 15px;">
-            <span style="color: {id_color};">{train_code}</span> 
-            <span style="color: #ffffff;">{orig_time}</span> 
-            <span style="color: #2ecc71;">{origin_name} → {dest_name}</span> 
-            <span style="color: {status_color};">({status_str})</span>
-        </div>
-        """
-        st.markdown(header_html, unsafe_allow_html=True)
-
-        itinerary_rows = []
-        for node in movements:
-            station_name = extract_node_txt(node, "LocationFullName") or extract_node_txt(node, "LocationCode")
-            loc_type = extract_node_txt(node, "LocationType")
-            stops_text = "Non Stop" if loc_type == "C" else ("Stops" if loc_type in ["O", "D", "S"] else "")
-
-            sched_arr = extract_node_txt(node, "ScheduledArrival")
-            sched_dep = extract_node_txt(node, "ScheduledDeparture")
-            due_time = sched_dep if sched_dep and sched_dep != "00:00:00" else sched_arr
-            if len(due_time) == 8: due_time = due_time[:5]
-
-            actual_arr = extract_node_txt(node, "Arrival")
-            actual_dep = extract_node_txt(node, "Departure")
-            exp_arr = extract_node_txt(node, "ExpectedArrival")
-            exp_dep = extract_node_txt(node, "ExpectedDeparture")
-            reason_text = extract_node_txt(node, "AutoReason") or "--"
-
-            has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
-            delay_mins = 0
-            if has_served:
-                if sched_dep and sched_dep != "00:00:00":
-                    delay_mins = calculate_delay(sched_dep, exp_dep, actual_dep)
-                elif sched_arr and sched_arr != "00:00:00":
-                    delay_mins = calculate_delay(sched_arr, exp_arr, actual_arr)
-
-            arrive_text = (actual_arr if actual_arr and actual_arr != "00:00:00" else exp_arr) or "--:--"
-            if len(arrive_text) == 8: arrive_text = arrive_text[:5]
-
-            depart_text = (actual_dep if actual_dep and actual_dep != "00:00:00" else exp_dep) or "--:--"
-            if len(depart_text) == 8: depart_text = depart_text[:5]
-
-            mins_text = f"{delay_mins:.1f}" if has_served else ""
-
-            itinerary_rows.append({
-                "Location": station_name,
-                "Stops": stops_text,
-                "Due": due_time,
-                "Arrive": arrive_text,
-                "Depart": depart_text,
-                "Mins": mins_text,
-                "Reason": reason_text,
-                "_hasServed": has_served,
-                "_delayMins": delay_mins,
-                "_locType": loc_type
-            })
-
-        df_itin = pd.DataFrame(itinerary_rows)
-        display_itin = df_itin.drop(columns=["_hasServed", "_delayMins", "_locType"])
-
-        def style_itin(df_sub):
-            styles = pd.DataFrame('', index=df_sub.index, columns=df_sub.columns)
-            for i, row in df_sub.iterrows():
-                has_served = df_itin.at[i, "_hasServed"]
-                delay_mins = df_itin.at[i, "_delayMins"]
-                loc_type = df_itin.at[i, "_locType"]
-
-                if loc_type in ["O", "D", "S"]:
-                    styles.at[i, "Location"] = "color: #d4af37;"
-                elif loc_type == "C":
-                    styles.at[i, "Location"] = "color: #c678dd;"
-
-                if loc_type == "C":
-                    styles.at[i, "Stops"] = "color: #c678dd;"
-
-                # Faded for future times, bright cyan for served times
+            has_any_cancel = any(extract_node_txt(n, "LocationType") == "C" for n in movements)
+            is_fully_cancelled = all(extract_node_txt(n, "LocationType") == "C" for n in movements)
+            
+            latest_delay = 0.0
+            for node in movements:
+                sched_dep = extract_node_txt(node, "ScheduledDeparture")
+                sched_arr = extract_node_txt(node, "ScheduledArrival")
+                exp_dep = extract_node_txt(node, "ExpectedDeparture")
+                exp_arr = extract_node_txt(node, "ExpectedArrival")
+                actual_dep = extract_node_txt(node, "Departure")
+                actual_arr = extract_node_txt(node, "Arrival")
+                has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
                 if has_served:
-                    styles.at[i, "Arrive"] = "color: #00ffff;"
-                    styles.at[i, "Depart"] = "color: #00ffff;"
-                else:
-                    styles.at[i, "Arrive"] = "color: #666666;"
-                    styles.at[i, "Depart"] = "color: #666666;"
+                    if sched_dep and sched_dep != "00:00:00":
+                        latest_delay = calculate_delay(sched_dep, exp_dep, actual_dep)
+                    elif sched_arr and sched_arr != "00:00:00":
+                        latest_delay = calculate_delay(sched_arr, exp_arr, actual_arr)
 
+            if is_fully_cancelled or has_any_cancel:
+                status_str, status_color = "Cancelled", "#c678dd"
+                id_color = "#c678dd"
+            elif latest_delay == 0:
+                status_str, status_color = "On Time", "#2ecc71"
+                id_color = "#d4af37"
+            elif latest_delay <= 2:
+                status_str, status_color = f"Late {latest_delay:.1f}m", "#2ecc71"
+                id_color = "#d4af37"
+            elif latest_delay <= 5:
+                status_str, status_color = f"Late {latest_delay:.1f}m", "#f1c40f"
+                id_color = "#d4af37"
+            else:
+                status_str, status_color = f"Late {latest_delay:.1f}m", "#e74c3c"
+                id_color = "#d4af37"
+
+            header_html = f"""
+            <div style="font-size: 20px; font-weight: bold; font-family: 'Segoe UI', sans-serif; margin-bottom: 15px;">
+                <span style="color: {id_color};">{train_code}</span> 
+                <span style="color: #ffffff;">{orig_time}</span> 
+                <span style="color: #2ecc71;">{origin_name} → {dest_name}</span> 
+                <span style="color: {status_color};">({status_str})</span>
+            </div>
+            """
+            st.markdown(header_html, unsafe_allow_html=True)
+
+            itinerary_rows = []
+            for node in movements:
+                station_name = extract_node_txt(node, "LocationFullName") or extract_node_txt(node, "LocationCode")
+                loc_type = extract_node_txt(node, "LocationType")
+                stops_text = "Non Stop" if loc_type == "C" else ("Stops" if loc_type in ["O", "D", "S"] else "")
+
+                sched_arr = extract_node_txt(node, "ScheduledArrival")
+                sched_dep = extract_node_txt(node, "ScheduledDeparture")
+                due_time = sched_dep if sched_dep and sched_dep != "00:00:00" else sched_arr
+                if len(due_time) == 8: due_time = due_time[:5]
+
+                actual_arr = extract_node_txt(node, "Arrival")
+                actual_dep = extract_node_txt(node, "Departure")
+                exp_arr = extract_node_txt(node, "ExpectedArrival")
+                exp_dep = extract_node_txt(node, "ExpectedDeparture")
+                reason_text = extract_node_txt(node, "AutoReason") or "--"
+
+                has_served = (actual_arr and actual_arr != "00:00:00") or (actual_dep and actual_dep != "00:00:00")
+                delay_mins = 0
                 if has_served:
-                    if delay_mins == 0:
-                        styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
-                    elif delay_mins < 0:
-                        styles.at[i, "Mins"] = "color: #ffffff;"
-                    elif delay_mins <= 2:
-                        styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
-                    elif delay_mins <= 5:
-                        styles.at[i, "Mins"] = "color: #f1c40f; font-weight: bold;"
+                    if sched_dep and sched_dep != "00:00:00":
+                        delay_mins = calculate_delay(sched_dep, exp_dep, actual_dep)
+                    elif sched_arr and sched_arr != "00:00:00":
+                        delay_mins = calculate_delay(sched_arr, exp_arr, actual_arr)
+
+                arrive_text = (actual_arr if actual_arr and actual_arr != "00:00:00" else exp_arr) or "--:--"
+                if len(arrive_text) == 8: arrive_text = arrive_text[:5]
+
+                depart_text = (actual_dep if actual_dep and actual_dep != "00:00:00" else exp_dep) or "--:--"
+                if len(depart_text) == 8: depart_text = depart_text[:5]
+
+                mins_text = f"{delay_mins:.1f}" if has_served else ""
+
+                itinerary_rows.append({
+                    "Location": station_name,
+                    "Stops": stops_text,
+                    "Due": due_time,
+                    "Arrive": arrive_text,
+                    "Depart": depart_text,
+                    "Mins": mins_text,
+                    "Reason": reason_text,
+                    "_hasServed": has_served,
+                    "_delayMins": delay_mins,
+                    "_locType": loc_type
+                })
+
+            df_itin = pd.DataFrame(itinerary_rows)
+            display_itin = df_itin.drop(columns=["_hasServed", "_delayMins", "_locType"])
+
+            def style_itin(df_sub):
+                styles = pd.DataFrame('', index=df_sub.index, columns=df_sub.columns)
+                for i, row in df_sub.iterrows():
+                    has_served = df_itin.at[i, "_hasServed"]
+                    delay_mins = df_itin.at[i, "_delayMins"]
+                    loc_type = df_itin.at[i, "_locType"]
+
+                    if loc_type in ["O", "D", "S"]:
+                        styles.at[i, "Location"] = "color: #d4af37;"
+                    elif loc_type == "C":
+                        styles.at[i, "Location"] = "color: #c678dd;"
+
+                    if loc_type == "C":
+                        styles.at[i, "Stops"] = "color: #c678dd;"
+
+                    if has_served:
+                        styles.at[i, "Arrive"] = "color: #00ffff;"
+                        styles.at[i, "Depart"] = "color: #00ffff;"
                     else:
-                        styles.at[i, "Mins"] = "color: #e74c3c; font-weight: bold;"
+                        styles.at[i, "Arrive"] = "color: #666666;"
+                        styles.at[i, "Depart"] = "color: #666666;"
 
-                if str(row["Reason"]) != "--":
-                    styles.at[i, "Reason"] = "color: #e74c3c;"
-                else:
-                    styles.at[i, "Reason"] = "color: #a6a6a6;"
+                    if has_served:
+                        if delay_mins == 0:
+                            styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
+                        elif delay_mins < 0:
+                            styles.at[i, "Mins"] = "color: #ffffff;"
+                        elif delay_mins <= 2:
+                            styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
+                        elif delay_mins <= 5:
+                            styles.at[i, "Mins"] = "color: #f1c40f; font-weight: bold;"
+                        else:
+                            styles.at[i, "Mins"] = "color: #e74c3c; font-weight: bold;"
 
-            return styles
+                    if str(row["Reason"]) != "--":
+                        styles.at[i, "Reason"] = "color: #e74c3c;"
+                    else:
+                        styles.at[i, "Reason"] = "color: #a6a6a6;"
 
-        styled_itin = display_itin.style.apply(style_itin, axis=None)
-        st.dataframe(styled_itin, use_container_width=True, hide_index=True, height=700)
-    except Exception as e:
-        st.error(f"Error fetching itinerary: {e}")
+                return styles
+
+            styled_itin = display_itin.style.apply(style_itin, axis=None)
+            st.dataframe(styled_itin, use_container_width=True, hide_index=True, height=700)
+        except Exception as e:
+            st.error(f"Error fetching itinerary: {e}")
 
 # --- MAIN DASHBOARD VIEW ---
 def render_dashboard():
@@ -384,7 +393,6 @@ def render_dashboard():
     display_list = list(live_trains.values())
     display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
 
-    # Top layout: Title & timestamp on the left, search box on the right at the same level
     col_title, col_search = st.columns([3, 1])
     with col_title:
         st.title("Train Status")
