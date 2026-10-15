@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
@@ -238,7 +239,7 @@ def render_itinerary_view(train_code):
         st.query_params.clear()
         st.rerun()
 
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Europe/Dublin"))
     use_yesterday = False
     date_str = (now - timedelta(days=1)).strftime("%d %b %Y") if use_yesterday else now.strftime("%d %b %Y")
     url = f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={date_str}"
@@ -288,7 +289,6 @@ def render_itinerary_view(train_code):
             has_any_cancel = any(extract_node_txt(n, "LocationType") == "C" for n in movements)
             is_fully_cancelled = all(extract_node_txt(n, "LocationType") == "C" for n in movements)
             
-            # Check if the train has terminated/completed its journey at the final station
             last_arr = extract_node_txt(last_node, "Arrival")
             last_dep = extract_node_txt(last_node, "Departure")
             is_terminated = (last_arr and last_arr != "00:00:00") or (last_dep and last_dep != "00:00:00")
@@ -407,7 +407,8 @@ def render_dashboard():
     col_title, col_search = st.columns([3, 1])
     with col_title:
         st.title("Train Status")
-        st.write(f"Last updated: {datetime.now().strftime('%H:%M:%S (%a)')} — ({len(display_list)} live train data blocks returned by API)")
+        current_time_str = datetime.now(ZoneInfo("Europe/Dublin")).strftime('%H:%M:%S (%a)')
+        st.write(f"Last updated: {current_time_str} — ({len(display_list)} live train data blocks returned by API)")
     with col_search:
         auth_token = st.session_state.get("auth_token", "")
         st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
