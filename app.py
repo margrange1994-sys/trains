@@ -54,7 +54,6 @@ if "authenticated" not in st.session_state:
 
 app_password = st.secrets.get("APP_PASSWORD", "railadmin2026")
 
-# Auto-authenticate new tabs if valid auth token is passed in query parameters
 query_auth = st.query_params.get("auth")
 if query_auth == app_password:
     st.session_state.authenticated = True
@@ -262,7 +261,7 @@ def render_itinerary_view(train_code):
             movements = root_xml.findall('.//ns:objTrainMovements', namespace)
 
             if not movements:
-                st.warning(f"No movement data found for {train_code} on {date_str}.")
+                st.warning(f"No movement data found for '{train_code}' on {date_str}.")
                 return
 
             def get_location_order(node):
@@ -407,12 +406,10 @@ def render_dashboard():
         st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
-            if search_query in live_trains:
-                st.query_params["train"] = search_query
-                st.query_params["auth"] = auth_token
-                st.rerun()
-            else:
-                st.warning(f"Train ID '{search_query}' not found.")
+            # Allow searching for any train code (including completed ones from earlier today)
+            st.query_params["train"] = search_query
+            st.query_params["auth"] = auth_token
+            st.rerun()
 
     auth_token = st.session_state.get("auth_token", "")
     train_rows_html = ""
@@ -442,7 +439,6 @@ def render_dashboard():
         orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
         dest_display = train["destination"] if train["destination"] not in ["Destination", ""] else "--"
 
-        # Passes auth token in the URL so new tabs bypass the password screen automatically
         train_rows_html += f'<tr style="background-color: {bg_color};"><td><a href="?train={train_code}&auth={auth_token}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td><td style="color: #ffffff;">{train["origintime"]}</td><td style="color: #ffffff;">{orig_display}</td><td style="color: #ffffff;">{dest_display}</td><td style="color: {color}; font-weight: bold;">{delay_text}</td><td style="color: #ffffff;">{train["cleanStatus"]}</td><td style="color: {reason_color};">{train["delayReason"]}</td></tr>'
 
     dashboard_table_html = f'<div style="max-height: 700px; overflow-y: auto;"><table class="train-table"><tr><th>ID</th><th>Time</th><th>Origin</th><th>Destination</th><th>Delay</th><th>Status</th><th>Reason</th></tr>{train_rows_html}</table></div>'
