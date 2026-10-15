@@ -6,12 +6,18 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Rail Live Dashboard", layout="wide")
 
-# Custom styling for dark theme
+# Custom styling for dark theme and reduced top spacing to show more table rows
 st.markdown("""
     <style>
     .stApp {
         background-color: #0b0c10;
         color: #ffffff;
+    }
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 1rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
     }
     h1, h2, h3, p, label {
         color: #ffffff !important;
@@ -313,16 +319,64 @@ def render_dashboard():
             "Destination": train["destination"] if train["destination"] not in ["Destination", ""] else "--",
             "Delay": delay_text,
             "Status": train["cleanStatus"],
-            "Reason": train["delayReason"]
+            "Reason": train["delayReason"],
+            "_isCancelled": is_cancelled,
+            "_statusCode": train["statusCode"],
+            "_lateMins": delay_mins
         })
 
     df = pd.DataFrame(table_data)
 
-    st.info("💡 **Tip:** Click any row in the table below to instantly view its full stop-by-stop itinerary.")
+    # Pandas Styler function to apply exact train ID and delay color rules from original script[cite: 3]
+    def style_table(df_subset):
+        styles = pd.DataFrame('', index=df_subset.index, columns=df_subset.columns)
+        for i, row in df_subset.iterrows():
+            # Train ID color rules: purple (#c678dd) if cancelled, gold (#d4af37) otherwise[cite: 3]
+            if row["_isCancelled"]:
+                styles.at[i, "ID"] = "color: #c678dd; font-weight: bold;"
+            else:
+                styles.at[i, "ID"] = "color: #d4af37; font-weight: bold;"
+
+            # Delay color rules: green, yellow, red, white, grey based on severity[cite: 3]
+            delay_text = str(row["Delay"])
+            if row["_isCancelled"] or "Cancelled" in delay_text:
+                styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
+            elif row["_statusCode"] == "N":
+                styles.at[i, "Delay"] = "color: #ffffff;"
+            elif row["_statusCode"] == "E":
+                styles.at[i, "Delay"] = "color: #a6a6a6;"
+            elif "Early" in delay_text:
+                styles.at[i, "Delay"] = "color: #ffffff;"
+            elif "On Time" in delay_text or "0m Delay" in delay_text:
+                styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
+            else:
+                # Extract delay numeric minutes if possible for threshold styling
+                try:
+                    mins = row["_lateMins"]
+                    if mins <= 2:
+                        styles.at[i, "Delay"] = "color: #2ecc71; font-weight: bold;"
+                    elif 2 < mins <= 5:
+                        styles.at[i, "Delay"] = "color: #f1c40f; font-weight: bold;"
+                    else:
+                        styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
+                except:
+                    styles.at[i, "Delay"] = "color: #e74c3c; font-weight: bold;"
+
+            # Reason color: red if active reason, grey otherwise[cite: 3]
+            if str(row["Reason"]) != "--":
+                styles.at[i, "Reason"] = "color: #e74c3c;"
+            else:
+                styles.at[i, "Reason"] = "color: #a6a6a6;"
+
+        # Drop internal helper columns from styling output view
+        return styles.drop(columns=["_isCancelled", "_statusCode", "_lateMins"], errors="ignore")
+
+    display_df = df.drop(columns=["_isCancelled", "_statusCode", "_lateMins"])
+    styled_df = display_df.style.apply(style_table, axis=None)
 
     # Interactive table with row selection support
     event = st.dataframe(
-        df,
+        styled_df,
         use_container_width=True,
         hide_index=True,
         selection_mode="single-row",
@@ -332,7 +386,7 @@ def render_dashboard():
     # Handle row click selection
     if event.selection and event.selection.rows:
         row_idx = event.selection.rows[0]
-        clicked_train_code = df.iloc[row_idx]["ID"]
+        clicked_train_code = display_df.iloc[row_idx]["ID"]
         st.session_state.selected_train = clicked_train_code
         st.rerun()
 
