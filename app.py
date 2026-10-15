@@ -259,10 +259,64 @@ def render_itinerary_view(train_code):
                 "Arrive": arrive_text,
                 "Depart": depart_text,
                 "Mins": mins_text,
-                "Reason": reason_text
+                "Reason": reason_text,
+                "_hasServed": has_served,
+                "_delayMins": delay_mins,
+                "_locType": loc_type
             })
 
-        st.dataframe(pd.DataFrame(itinerary_rows), use_container_width=True, hide_index=True)
+        df_itin = pd.DataFrame(itinerary_rows)
+        display_itin = df_itin.drop(columns=["_hasServed", "_delayMins", "_locType"])
+
+        # Styler function for Itinerary view
+        def style_itin(df_sub):
+            styles = pd.DataFrame('', index=df_sub.index, columns=df_sub.columns)
+            for i, row in df_sub.iterrows():
+                has_served = df_itin.at[i, "_hasServed"]
+                delay_mins = df_itin.at[i, "_delayMins"]
+                loc_type = df_itin.at[i, "_locType"]
+
+                # Location color rule from original script[cite: 3]
+                if loc_type in ["O", "D", "S"]:
+                    styles.at[i, "Location"] = "color: #d4af37;"
+                elif loc_type == "C":
+                    styles.at[i, "Location"] = "color: #c678dd;"
+
+                # Stops color rule[cite: 3]
+                if loc_type == "C":
+                    styles.at[i, "Stops"] = "color: #c678dd;"
+
+                # Arrive & Depart: Faded if future (not served), bright cyan if served[cite: 3]
+                if has_served:
+                    styles.at[i, "Arrive"] = "color: #00ffff;"
+                    styles.at[i, "Depart"] = "color: #00ffff;"
+                else:
+                    styles.at[i, "Arrive"] = "color: #666666;"
+                    styles.at[i, "Depart"] = "color: #666666;"
+
+                # Mins color rules matching severity thresholds[cite: 3]
+                if has_served:
+                    if delay_mins == 0:
+                        styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
+                    elif delay_mins < 0:
+                        styles.at[i, "Mins"] = "color: #ffffff;"
+                    elif delay_mins <= 2:
+                        styles.at[i, "Mins"] = "color: #2ecc71; font-weight: bold;"
+                    elif delay_mins <= 5:
+                        styles.at[i, "Mins"] = "color: #f1c40f; font-weight: bold;"
+                    else:
+                        styles.at[i, "Mins"] = "color: #e74c3c; font-weight: bold;"
+
+                # Reason color[cite: 3]
+                if str(row["Reason"]) != "--":
+                    styles.at[i, "Reason"] = "color: #e74c3c;"
+                else:
+                    styles.at[i, "Reason"] = "color: #a6a6a6;"
+
+            return styles
+
+        styled_itin = display_itin.style.apply(style_itin, axis=None)
+        st.dataframe(styled_itin, use_container_width=True, hide_index=True, height=700)
     except Exception as e:
         st.error(f"Error fetching itinerary: {e}")
 
@@ -370,7 +424,6 @@ def render_dashboard():
 
     styled_df = display_df.style.apply(style_table, axis=None)
 
-    # Expanded table height (height=700) to show more rows without adjustment
     event = st.dataframe(
         styled_df,
         use_container_width=True,
