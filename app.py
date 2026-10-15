@@ -99,7 +99,10 @@ def fetch_live_trains():
                 dest_station = get_node_text("TrainDestination") or "Destination"
                 origin_time = "--:--"
                 late_mins = 0
-                is_cancelled = status_flag == "C" or (public_msg and "CANCEL" in public_msg.upper())
+                
+                # Robustly detect full or partial cancellations / alterations
+                pub_upper = public_msg.upper() if public_msg else ""
+                is_cancelled = status_flag == "C" or any(kw in pub_upper for kw in ["CANCEL", "ALTER", "OMIT", "SUSPEND"])
 
                 if public_msg:
                     clean_msg = public_msg.replace("\\n", "\n").replace(r"\n", "\n")
@@ -164,8 +167,8 @@ def fetch_live_trains():
                 delay_reason = "--"
 
                 if is_cancelled:
-                    clean_status = "Cancelled"
-                    delay_reason = "Service Cancelled"
+                    clean_status = "Cancelled / Altered" if "ALTER" in pub_upper else "Cancelled"
+                    delay_reason = public_msg if public_msg else "Service Cancelled"
                 elif public_msg:
                     msg_lines = [l.strip() for l in public_msg.replace(r"\n", "\n").split("\n") if l.strip()]
                     if len(msg_lines) >= 3:
@@ -266,10 +269,8 @@ def render_itinerary_view(train_code):
                     elif sched_arr and sched_arr != "00:00:00":
                         latest_delay = calculate_delay(sched_arr, exp_arr, actual_arr)
 
-            # Train ID color is purple if fully cancelled OR has any partial cancellation (stops removed)
             id_color = "#c678dd" if (is_fully_cancelled or has_any_cancel) else "#d4af37"
 
-            # Status string is "Cancelled" ONLY if fully cancelled. Otherwise show delay status.
             if is_fully_cancelled:
                 status_str, status_color = "Cancelled", "#c678dd"
             elif latest_delay == 0:
@@ -398,6 +399,7 @@ def render_dashboard():
             color, delay_text = "#e74c3c", f"{delay_mins}m Delay"
 
         bg_color = "#1f2833" if idx % 2 == 0 else "#151c24"
+        # Train ID is purple (#c678dd) if fully or partially cancelled
         train_id_color = "#c678dd" if is_cancelled else "#d4af37"
         reason_color = "#e74c3c" if train["delayReason"] != "--" else "#a6a6a6"
         orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
