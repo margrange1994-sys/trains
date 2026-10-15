@@ -48,9 +48,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- AUTHENTICATION CHECK ---
+# --- AUTHENTICATION CHECK WITH MULTI-TAB TOKEN SUPPORT ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+
+app_password = st.secrets.get("APP_PASSWORD", "railadmin2026")
+
+# Auto-authenticate new tabs if valid auth token is passed in query parameters
+query_auth = st.query_params.get("auth")
+if query_auth == app_password:
+    st.session_state.authenticated = True
+    st.session_state.auth_token = query_auth
 
 def check_password():
     if st.session_state.authenticated:
@@ -64,10 +72,9 @@ def check_password():
         submit_button = st.form_submit_button("Login")
         
         if submit_button:
-            # Retrieves password from Streamlit secrets
-            correct_password = st.secrets.get("APP_PASSWORD", "railadmin2026")
-            if entered_password == correct_password:
+            if entered_password == app_password:
                 st.session_state.authenticated = True
+                st.session_state.auth_token = entered_password
                 st.rerun()
             else:
                 st.error("Incorrect password. Please try again.")
@@ -396,15 +403,18 @@ def render_dashboard():
         st.title("Train Status")
         st.write(f"Last updated: {datetime.now().strftime('%H:%M:%S (%a)')} — ({len(display_list)} live train data blocks returned by API)")
     with col_search:
+        auth_token = st.session_state.get("auth_token", "")
         st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
             if search_query in live_trains:
                 st.query_params["train"] = search_query
+                st.query_params["auth"] = auth_token
                 st.rerun()
             else:
                 st.warning(f"Train ID '{search_query}' not found.")
 
+    auth_token = st.session_state.get("auth_token", "")
     train_rows_html = ""
     for idx, train in enumerate(display_list):
         train_code = train["trainCode"]
@@ -432,7 +442,8 @@ def render_dashboard():
         orig_display = train["origin"] if train["origin"] not in ["Origin", ""] else "--"
         dest_display = train["destination"] if train["destination"] not in ["Destination", ""] else "--"
 
-        train_rows_html += f'<tr style="background-color: {bg_color};"><td><a href="?train={train_code}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td><td style="color: #ffffff;">{train["origintime"]}</td><td style="color: #ffffff;">{orig_display}</td><td style="color: #ffffff;">{dest_display}</td><td style="color: {color}; font-weight: bold;">{delay_text}</td><td style="color: #ffffff;">{train["cleanStatus"]}</td><td style="color: {reason_color};">{train["delayReason"]}</td></tr>'
+        # Passes auth token in the URL so new tabs bypass the password screen automatically
+        train_rows_html += f'<tr style="background-color: {bg_color};"><td><a href="?train={train_code}&auth={auth_token}" target="_blank" style="color: {train_id_color}; font-weight: bold; text-decoration: none;">{train_code}</a></td><td style="color: #ffffff;">{train["origintime"]}</td><td style="color: #ffffff;">{orig_display}</td><td style="color: #ffffff;">{dest_display}</td><td style="color: {color}; font-weight: bold;">{delay_text}</td><td style="color: #ffffff;">{train["cleanStatus"]}</td><td style="color: {reason_color};">{train["delayReason"]}</td></tr>'
 
     dashboard_table_html = f'<div style="max-height: 700px; overflow-y: auto;"><table class="train-table"><tr><th>ID</th><th>Time</th><th>Origin</th><th>Destination</th><th>Delay</th><th>Status</th><th>Reason</th></tr>{train_rows_html}</table></div>'
     st.markdown(dashboard_table_html, unsafe_allow_html=True)
