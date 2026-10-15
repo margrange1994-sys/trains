@@ -190,34 +190,24 @@ def render_itinerary_view(train_code):
     date_str = (now - timedelta(days=1)).strftime("%d %b %Y") if use_yesterday else now.strftime("%d %b %Y")
     url = f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={date_str}"
 
-    with st.spinner(f"Loading itinerary for service {train_code}..."):
+    with st.spinner(f"Loading itinerary for service {train_code} (waiting for response)..."):
         try:
-            # Robust retry loop to prevent intermittent API timeouts
-            response = None
-            for attempt in range(3):
-                try:
-                    response = requests.get(url, timeout=12)
-                    if response.status_code == 200:
-                        break
-                except requests.exceptions.RequestException:
-                    if attempt == 2:
-                        raise
-                    continue
+            # Single robust request with an extended timeout (35 seconds) to prevent premature dropouts
+            response = requests.get(url, timeout=35)
 
-            if not response or response.status_code != 200:
-                st.error(f"API Error: {response.status_code if response else 'Connection failed'}")
-                return
+            if response.status_code != 200:
+                # Fallback check for yesterday if near midnight
+                if now.hour < 3 and not use_yesterday:
+                    yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
+                    response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=35)
+                
+                if response.status_code != 200:
+                    st.error(f"API Error: {response.status_code}")
+                    return
                 
             root_xml = ET.fromstring(response.content)
             namespace = {'ns': 'http://api.irishrail.ie/realtime/'}
             movements = root_xml.findall('.//ns:objTrainMovements', namespace)
-
-            if not movements and now.hour < 3:
-                yesterday_str = (now - timedelta(days=1)).strftime("%d %b %Y")
-                response = requests.get(f"https://api.irishrail.ie/realtime/realtime.asmx/getTrainMovementsXML?TrainId={train_code}&TrainDate={yesterday_str}", timeout=12)
-                if response.status_code == 200:
-                    root_xml = ET.fromstring(response.content)
-                    movements = root_xml.findall('.//ns:objTrainMovements', namespace)
 
             if not movements:
                 st.warning(f"No movement data found for {train_code} on {date_str}.")
