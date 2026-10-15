@@ -14,7 +14,7 @@ st.markdown("""
         color: #ffffff;
     }
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.0rem;
         padding-bottom: 1rem;
         padding-left: 2rem;
         padding-right: 2rem;
@@ -268,16 +268,21 @@ def render_itinerary_view(train_code):
 
 # --- MAIN DASHBOARD VIEW ---
 def render_dashboard():
-    st.title("Train Status")
-    st.write(f"Last updated: {datetime.now().strftime('%H:%M:%S (%a)')}")
-
     live_trains = fetch_live_trains()
     if not live_trains:
         st.warning("No live train data returned from API.")
         return
 
-    col1, col2 = st.columns([3, 1])
-    with col2:
+    display_list = list(live_trains.values())
+    display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
+
+    # Top layout: Title & status info on the left, search box on the right at the same level
+    col_title, col_search = st.columns([3, 1])
+    with col_title:
+        st.title("Train Status")
+        st.write(f"Last updated: {datetime.now().strftime('%H:%M:%S (%a)')} — ({len(display_list)} live train data blocks returned by API)")
+    with col_search:
+        st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
             if search_query in live_trains:
@@ -285,11 +290,6 @@ def render_dashboard():
                 st.rerun()
             else:
                 st.warning(f"Train ID '{search_query}' not found.")
-
-    display_list = list(live_trains.values())
-    display_list.sort(key=lambda t: t["origintime"] if t["origintime"] != "--:--" else "99:99")
-
-    st.write(f"({len(display_list)} live train data blocks returned by API)")
 
     table_data = []
     for train in display_list:
@@ -327,7 +327,6 @@ def render_dashboard():
     df = pd.DataFrame(table_data)
     display_df = df.drop(columns=["_isCancelled", "_statusCode", "_lateMins"])
 
-    # Pandas Styler function referencing original df
     def style_table(df_subset):
         styles = pd.DataFrame('', index=df_subset.index, columns=df_subset.columns)
         for i, row in df_subset.iterrows():
@@ -371,16 +370,16 @@ def render_dashboard():
 
     styled_df = display_df.style.apply(style_table, axis=None)
 
-    # Interactive table with row selection support
+    # Expanded table height (height=700) to show more rows without adjustment
     event = st.dataframe(
         styled_df,
         use_container_width=True,
         hide_index=True,
+        height=700,
         selection_mode="single-row",
         on_select="rerun"
     )
 
-    # Handle row click selection
     if event.selection and event.selection.rows:
         row_idx = event.selection.rows[0]
         clicked_train_code = display_df.iloc[row_idx]["ID"]
