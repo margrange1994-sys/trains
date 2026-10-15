@@ -288,6 +288,11 @@ def render_itinerary_view(train_code):
             has_any_cancel = any(extract_node_txt(n, "LocationType") == "C" for n in movements)
             is_fully_cancelled = all(extract_node_txt(n, "LocationType") == "C" for n in movements)
             
+            # Check if the train has terminated/completed its journey at the final station
+            last_arr = extract_node_txt(last_node, "Arrival")
+            last_dep = extract_node_txt(last_node, "Departure")
+            is_terminated = (last_arr and last_arr != "00:00:00") or (last_dep and last_dep != "00:00:00")
+
             latest_delay = 0.0
             for node in movements:
                 sched_dep = extract_node_txt(node, "ScheduledDeparture")
@@ -307,6 +312,8 @@ def render_itinerary_view(train_code):
 
             if is_fully_cancelled:
                 status_str, status_color = "Cancelled", "#c678dd"
+            elif is_terminated:
+                status_str, status_color = "Terminated", "#a6a6a6"
             elif latest_delay == 0:
                 status_str, status_color = "On Time", "#2ecc71"
             elif latest_delay <= 2:
@@ -406,7 +413,6 @@ def render_dashboard():
         st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
         search_query = st.text_input("Search Train ID:", "").strip().upper()
         if search_query:
-            # Allow searching for any train code (including completed ones from earlier today)
             st.query_params["train"] = search_query
             st.query_params["auth"] = auth_token
             st.rerun()
