@@ -266,21 +266,20 @@ def render_itinerary_view(train_code):
                     elif sched_arr and sched_arr != "00:00:00":
                         latest_delay = calculate_delay(sched_arr, exp_arr, actual_arr)
 
-            if is_fully_cancelled or has_any_cancel:
+            # Train ID color is purple if fully cancelled OR has any partial cancellation (stops removed)
+            id_color = "#c678dd" if (is_fully_cancelled or has_any_cancel) else "#d4af37"
+
+            # Status string is "Cancelled" ONLY if fully cancelled. Otherwise show delay status.
+            if is_fully_cancelled:
                 status_str, status_color = "Cancelled", "#c678dd"
-                id_color = "#c678dd"
             elif latest_delay == 0:
                 status_str, status_color = "On Time", "#2ecc71"
-                id_color = "#d4af37"
             elif latest_delay <= 2:
                 status_str, status_color = f"Late {latest_delay:.1f}m", "#2ecc71"
-                id_color = "#d4af37"
             elif latest_delay <= 5:
                 status_str, status_color = f"Late {latest_delay:.1f}m", "#f1c40f"
-                id_color = "#d4af37"
             else:
                 status_str, status_color = f"Late {latest_delay:.1f}m", "#e74c3c"
-                id_color = "#d4af37"
 
             header_html = f"""
             <div style="font-size: 20px; font-weight: bold; font-family: 'Segoe UI', sans-serif; margin-bottom: 15px;">
