@@ -48,6 +48,35 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- AUTHENTICATION CHECK ---
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+def check_password():
+    if st.session_state.authenticated:
+        return True
+
+    st.title("🔒 Restricted Access")
+    st.write("Please enter the password to view the Rail Live Dashboard.")
+    
+    with st.form("login_form"):
+        entered_password = st.text_input("Password", type="password")
+        submit_button = st.form_submit_button("Login")
+        
+        if submit_button:
+            # Retrieves password from Streamlit secrets
+            correct_password = st.secrets.get("APP_PASSWORD", "railadmin2026")
+            if entered_password == correct_password:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password. Please try again.")
+    return False
+
+if not check_password():
+    st.stop()
+
+# --- APP LOGIC BELOW ---
 def parse_time(time_str):
     """Parse time to total minutes as float (including seconds)."""
     if not time_str or time_str == "00:00:00":
@@ -324,7 +353,6 @@ def render_itinerary_view(train_code):
 
                 mins_text = f"{delay_mins:.1f}" if has_served else ""
 
-                # Location color: White (#ffffff) for cancelled/non-stop (loc_type == "C"), Gold (#d4af37) for Origin/Destination/Stop (O, D, S)
                 loc_color = "#d4af37" if loc_type in ["O", "D", "S"] else "#ffffff"
                 stops_color = "#c678dd" if loc_type == "C" else "#ffffff"
                 arr_dep_color = "#00ffff" if has_served else "#666666"
